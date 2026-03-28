@@ -1,49 +1,39 @@
-import os
+Import os
 import telebot
 import requests
 import time
 from flask import Flask
 from threading import Thread
 
-# --- SERVIDOR WEB ---
+# --- SERVIDOR WEB (IGUAL AO PEDIDOS-BOT) ---
 app = Flask('')
 @app.route('/')
 def home(): return "Buscador Cloud Filmes Ativo!"
 
 def run():
+    # Usando a mesma porta 8080 que deu certo no outro
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
 
 # --- CONFIGURAÇÃO ---
+# Troquei pelos dados do seu buscador novo
 TOKEN = '8291779593:AAExSoK_DlVo6vbyU0BvWwfK790MvSTaI5g'
-# CORREÇÃO: Chave TMDB agora com o 'a' no início
 TMDB_KEY = 'a169d710b2eca204f9db290256828d05'
 BASE_EMBED = "https://embedplayapi.site/embed/"
 
 bot = telebot.TeleBot(TOKEN)
 
-# 1. Responde ao /start e /ajuda
-@bot.message_handler(commands=['start', 'ajuda'])
+# Comando Start (O que você quer que responda)
+@bot.message_handler(commands=['start'])
 def welcome(message):
-    bot.reply_to(message, "🔍 **BUSCADOR DE IDs ATIVO**\n\nPara conseguir o ID, basta digitar o nome do filme ou série abaixo!")
+    print("LOG: Recebi um /start")
+    bot.reply_to(message, "🔍 **BUSCADOR DE IDs ATIVO**\n\nEnvie o nome do filme ou série abaixo!")
 
-# 2. Responde ao comando /buscar nome
-@bot.message_handler(commands=['buscar'])
-def comando_buscar(message):
-    query = message.text.replace('/buscar', '').strip()
-    if query:
-        executar_busca(message, query)
-    else:
-        bot.reply_to(message, "⚠️ Digite o nome após o comando. Ex: `/buscar Rambo`")
-
-# 3. Responde se digitar apenas o nome (Busca Direta)
+# Lógica de Busca de IDs
 @bot.message_handler(func=lambda message: True)
-def busca_direta(message):
-    if not message.text.startswith('/'):
-        executar_busca(message, message.text)
-
-# --- FUNÇÃO DE BUSCA (A que pega os IDs) ---
-def executar_busca(message, query):
+def buscar_ids(message):
+    query = message.text
+    print(f"LOG: Buscando por {query}")
     url = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_KEY}&query={query}&language=pt-BR"
     
     try:
@@ -51,29 +41,32 @@ def executar_busca(message, query):
         resultados = res.get('results', [])
         
         if not resultados:
-            bot.reply_to(message, "❌ Nada encontrado. Verifique o nome.")
+            bot.reply_to(message, "❌ Nada encontrado.")
             return
 
-        # Pega os 3 primeiros resultados para não poluir o chat
-        for item in resultados[:3]:
-            tmdb_id = item.get('id')
-            tipo = item.get('media_type', 'movie')
-            titulo = item.get('title') or item.get('name')
-            ano = (item.get('release_date') or item.get('first_air_date') or "----")[:4]
+        item = resultados[0]
+        tmdb_id = item.get('id')
+        tipo = item.get('media_type', 'movie')
+        titulo = item.get('title') or item.get('name')
 
-            if tipo == 'movie':
-                link = f"{BASE_EMBED}{tmdb_id}"
-                bot.send_message(message.chat.id, f"🎬 **FILME: {titulo} ({ano})**\n🆔 ID: `{tmdb_id}`\n🔗 `{link}`", parse_mode="Markdown")
-            else:
-                # Se for série, manda o ID principal e o link do primeiro ep
-                link_serie = f"{BASE_EMBED}{tmdb_id}/1/1"
-                bot.send_message(message.chat.id, f"📺 **SÉRIE: {titulo} ({ano})**\n🆔 ID: `{tmdb_id}`\n🔗 Link Ep 1: `{link_serie}`", parse_mode="Markdown")
+        if tipo == 'movie':
+            link = f"{BASE_EMBED}{tmdb_id}"
+            bot.send_message(message.chat.id, f"🎬 **{titulo}**\n🆔 ID: `{tmdb_id}`\n🔗 `{link}`", parse_mode="Markdown")
+        else:
+            bot.send_message(message.chat.id, f"📺 **SÉRIE: {titulo}**\n🆔 ID: `{tmdb_id}`")
+            # Busca temporadas
+            url_tv = f"https://api.themoviedb.org/3/tv/{tmdb_id}?api_key={TMDB_KEY}&language=pt-BR"
+            detalhes = requests.get(url_tv).json()
+            for s in detalhes.get('seasons', []):
+                s_num = s.get('season_number')
+                if s_num == 0: continue
+                bot.send_message(message.chat.id, f"📅 Temp {s_num}: `{BASE_EMBED}{tmdb_id}/{s_num}/1`", parse_mode="Markdown")
 
     except Exception as e:
         print(f"ERRO: {e}")
-        bot.send_message(message.chat.id, "⚠️ Erro ao conectar com o TMDB.")
 
 if __name__ == "__main__":
     t = Thread(target=run)
     t.start()
+    # O skip_pending=True evita que o bot tente responder mensagens velhas e trave
     bot.infinity_polling(skip_pending=True)
